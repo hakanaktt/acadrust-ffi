@@ -1,0 +1,24 @@
+[package]
+name = "acadrust-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI bindings for acadrust CAD documents, DXF, and DWG"
+license = "MPL-2.0"
+repository = "https://github.com/hakanaktt/acadrust-ffi"
+readme = "README.md"
+keywords = ["cad", "dxf", "dwg", "ffi"]
+categories = ["external-ffi-bindings"]
+
+[lib]
+name = "acadrust_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+acadrust = { version = "=0.6.5", features = ["serde"] }
+rayon = "1"
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
