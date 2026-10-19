@@ -152,13 +152,7 @@ pub unsafe extern "C" fn ar_documents_read_files(
         let results: Vec<FfiResult<Document>> = pool.install(|| {
             paths
                 .par_iter()
-                .map(|path| {
-                    catch_ffi(|| {
-                        Ok(Document {
-                            inner: read_file(path)?,
-                        })
-                    })
-                })
+                .map(|path| catch_ffi(|| Ok(Document::new(read_file(path)?))))
                 .collect()
         });
         let mut statuses_copy = Vec::with_capacity(count);

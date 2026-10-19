@@ -31,6 +31,11 @@ extern "C" {
  */
 
 typedef struct Document Document;
+typedef struct StringView { const char *data; size_t len; } StringView;
+typedef struct ValueView { const void *data; const void *descriptor; } ValueView;
+typedef ValueView View;
+typedef int32_t ValueKind;
+typedef struct NativeResult NativeResult;
 typedef int32_t Status;
 typedef int32_t Format;
 
@@ -208,4 +213,12 @@ AR_API Status ar_layer_set_flags(Document *doc, const char *name, uint32_t flags
 #ifdef __cplusplus
 }
 #endif
+
+#include "acadrust_views.h"
+#include "acadrust_mutations.h"
+#include "acadrust_io.h"
+#include "acadrust_entities.h"
+#include "acadrust_database.h"
+#include "acadrust_acis.h"
+#include "acadrust_writable.h"
 #endif

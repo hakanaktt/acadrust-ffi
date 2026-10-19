@@ -7,9 +7,20 @@ installed CAD application.
 - Read and write DWG, ASCII DXF, and binary DXF, from files or memory.
 - Create, clone, and release documents; choose the export version.
 - Enumerate entities by persistent 64-bit handle.
-- Create, read, and edit lines, circles, arcs, points, and lightweight polylines.
-- Access all upstream entity variants through Serde JSON.
-- Create layers and edit layer colors, frozen/locked/off flags, and entity layers.
+- Construct all 48 upstream entity variants through a catalog of 97 entity kinds.
+- Traverse native entities, geometry, strings, arrays, XDATA, ACIS, and storage
+  metadata through borrowed views, without serialization or allocation.
+- Borrow direct writable numeric, byte, and UTF-8 string storage with an
+  exclusive lease; release it before accessing the drawing again.
+- Reach all 10 symbol tables, non-graphical object variants, classes, layouts,
+  drawing header variables, previews, and document metadata through native views.
+- Edit native properties, nested records, enums, options, and arrays through
+  typed native mutation calls. Existing simple geometry calls remain available.
+- Transform and explode entities; manage blocks, layer states, and XRecords;
+  audit and repair documents with native reports.
+- Configure recovery, encodings, progress callbacks, entity filtering, mmap,
+  export versions, DWG compression, and DWG header/CRC/section inspection.
+- Import STL, COLLADA, OBJ, glTF, GLB, and FBX with native options.
 - Receive status codes and thread-local error messages; unwinding Rust panics are
   caught at the boundary.
 - Run independent file reads and writes concurrently through a dedicated Rayon
@@ -24,8 +35,9 @@ The header also provides short source aliases for common calls: `ar_new`,
 `ar_free`, `ar_read_file`, `ar_read`, `ar_write_file`, `ar_write`,
 `ar_read_many`, `ar_write_many`, `ar_set_threads`, and `ar_get_threads`.
 They are macros over the full names and do not add ABI symbols.
-Tables other than layers, drawing header variables, non-graphical objects,
-layouts, and optional 3D importers do not yet have dedicated C APIs.
+The main header includes the view, entity, I/O, native mutation, writable-span,
+and ACIS interfaces. The native view API is the primary route to complete data
+access. The original JSON functions remain available for compatibility.
 
 ## Build
 
@@ -103,6 +115,28 @@ needed; the library never retains caller-owned memory. Free functions accept
 `NULL`, and `ar_buffer_free` resets the buffer. Other freed pointers must
 not be reused or freed twice.
 
+`ValueView` and `StringView` borrow native storage and are never freed. Strings
+carry byte lengths and need not be NUL-terminated. Primitive scalars and arrays
+expose their original read-only data pointer through `ar_value_data`; composite
+records expose named fields or indexed children. Rust struct and enum layouts
+remain opaque to C. Successful view traversal performs no heap allocations.
+
+Every document view and pointer derived from it expires before **any** document
+mutation or freeing. Reacquire views after writing. A view into an owned native
+report remains valid until that report is freed. Native setters copy new input
+where Rust must own it; parsing, decompression, report computation, and geometry
+operations can allocate. Zero-copy access does not imply allocation-free CAD
+decoding or a C-compatible layout for Rust structs and enum discriminants.
+
+`ar_entity_borrow_mut`, `ar_object_borrow_mut`, `ar_table_borrow_mut`, and
+`ar_document_borrow_mut` expose **direct writable native storage** for numeric
+scalars/arrays, byte arrays, and fixed-length UTF-8 strings. They return a
+`WritableSpan`; release it with `ar_writable_release` before any other document
+access. Release validates the data and updates native caches. On validation
+failure the span stays active so the caller can correct its contents and retry.
+No data buffer is copied. Identity/index fields and Rust validity-sensitive
+values use native setters. See `acadrust_writable.h` for the complete contract.
+
 Inspect `ar_last_error()` immediately after a nonzero status. Its borrowed
 string belongs to the calling thread and is replaced by the next call returning
 a status on that thread. Free and version functions preserve the message. A
@@ -114,7 +148,7 @@ documents may be used on separate threads. Array getters support a size query
 with a `NULL` buffer and zero capacity. Insufficient capacity returns
 `AR_BUFFER_TOO_SMALL` with the required count and leaves the array untouched.
 
-JSON is the upstream `EntityType` representation, such as `{"Line": {...}}`.
+The legacy JSON API uses the upstream `EntityType` representation, such as `{"Line": {...}}`.
 Obtain a complete value with `ar_entity_get_json`, edit it with a JSON
 library, and pass it to `ar_entity_set_json`. Replacement preserves the
 entity handle/owner and requires the same variant. `ar_entity_add_json`
@@ -122,6 +156,12 @@ assigns fresh identities and adds to model space; referenced blocks, styles,
 and objects must already exist. The schema is tied to upstream 0.6.5. Some
 native storage metadata is omitted by Serde, so JSON is not a lossless DWG
 archive or an independent drawing interchange format.
+
+Native entity catalog defaults may need geometry or references before export.
+Bounds, transformations, entity availability, and format fidelity follow
+acadrust 0.6.5. Unsupported upstream operations return an error; native access
+does not add a geometry kernel or make unsupported upstream entities writable
+in every file version. Borrowed views also expose raw data omitted by Serde.
 
 File reads use upstream strict mode and detect the format by content. Output
 format must be explicit; file output overwrites existing files. Supported

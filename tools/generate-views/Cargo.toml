@@ -1,0 +1,9 @@
+[package]
+name = "generate-acadrust-views"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+

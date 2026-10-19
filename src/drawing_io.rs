@@ -85,7 +85,7 @@ pub unsafe extern "C" fn ar_document_read_file(
         *out = ptr::null_mut();
         let path = input_str(path)?.to_owned();
         let inner = install(|| read_file(&path))??;
-        *out = Box::into_raw(Box::new(Document { inner }));
+        *out = Box::into_raw(Box::new(Document::new(inner)));
         Ok(())
     })
 }
@@ -108,7 +108,7 @@ pub unsafe extern "C" fn ar_document_read_buffer(
         // Readers own their input; never keep a caller's memory after returning.
         let bytes = std::slice::from_raw_parts(data, len).to_vec();
         let inner = install(|| read_document(Cursor::new(bytes), format))??;
-        *out = Box::into_raw(Box::new(Document { inner }));
+        *out = Box::into_raw(Box::new(Document::new(inner)));
         Ok(())
     })
 }

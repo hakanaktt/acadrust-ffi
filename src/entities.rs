@@ -244,7 +244,7 @@ pub unsafe extern "C" fn ar_entity_get_json(
     })
 }
 
-fn validate_json_entity(doc: &CadDocument, value: &EntityType) -> FfiResult<()> {
+pub(crate) fn validate_entity(doc: &CadDocument, value: &EntityType) -> FfiResult<()> {
     if !doc.layers.contains(&value.common().layer) {
         return Err(not_found(format!(
             "layer {:?} was not found",
@@ -296,7 +296,7 @@ fn clear_common_identity(value: &mut acadrust::entities::EntityCommon) {
 
 // Clear actual identities, without changing references to existing document
 // objects such as block definitions or handles stored in extended data.
-fn clear_identity(value: &mut EntityType) {
+pub(crate) fn clear_identity(value: &mut EntityType) {
     clear_common_identity(value.common_mut());
     match value {
         EntityType::Insert(value) => {
@@ -339,7 +339,7 @@ pub unsafe extern "C" fn ar_entity_add_json(
         clear_identity(&mut value);
         let out_handle = output(out_handle)?;
         let doc = document_mut(doc)?;
-        validate_json_entity(doc, &value)?;
+        validate_entity(doc, &value)?;
         *out_handle = doc.add_entity(value)?.value();
         Ok(())
     })
@@ -360,7 +360,7 @@ pub unsafe extern "C" fn ar_entity_set_json(
                 "JSON replacement must have the same entity variant",
             ));
         }
-        validate_json_entity(doc, &value)?;
+        validate_entity(doc, &value)?;
         value.preserve_storage_data_from(previous);
         value.common_mut().handle = previous.common().handle;
         value.common_mut().owner_handle = previous.common().owner_handle;
@@ -380,6 +380,14 @@ pub unsafe extern "C" fn ar_entity_remove(doc: *mut Document, handle: u64) -> St
         // remove entities, so remove the corresponding block references too.
         for block in doc.block_records.iter_mut() {
             block.entity_handles.retain(|value| value.value() != handle);
+        }
+        for object in doc.objects.values_mut() {
+            if let acadrust::objects::ObjectType::Layout(layout) = object {
+                layout.viewports.retain(|value| value.value() != handle);
+                if layout.viewport.value() == handle {
+                    layout.viewport = layout.viewports.first().copied().unwrap_or(Handle::NULL);
+                }
+            }
         }
         Ok(())
     })
@@ -791,9 +799,7 @@ mod tests {
     use std::ptr;
 
     fn drawing() -> Document {
-        Document {
-            inner: CadDocument::new(),
-        }
+        Document::new(CadDocument::new())
     }
 
     fn sample_line() -> Line {

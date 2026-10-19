@@ -7,16 +7,38 @@ use std::cell::RefCell;
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+mod acis;
+mod advanced_io;
+mod database;
+mod database_mutations;
+mod database_views;
+mod document_features;
+mod document_views;
 mod drawing_io;
 mod entities;
+mod entity_features;
+mod entity_views;
 mod layers;
+mod mutations;
 mod parallel_io;
+mod views;
+mod writable;
 
+pub use acis::*;
+pub use advanced_io::*;
+pub use database::*;
+pub use database_mutations::*;
+pub use document_features::*;
 pub use drawing_io::*;
 pub use entities::*;
+pub use entity_features::*;
 pub use layers::*;
+pub use mutations::*;
 pub use parallel_io::*;
+pub use views::*;
+pub use writable::*;
 
 /// Status values are fixed-width integers at the ABI boundary.
 #[repr(i32)]
@@ -35,6 +57,16 @@ pub enum Status {
 /// Opaque to C callers. Allocate and release only using this library.
 pub struct Document {
     pub(crate) inner: CadDocument,
+    pub(crate) writable: AtomicBool,
+}
+
+impl Document {
+    pub(crate) fn new(inner: CadDocument) -> Self {
+        Self {
+            inner,
+            writable: AtomicBool::new(false),
+        }
+    }
 }
 
 /// Owned bytes. Initialize to zero and release with `ar_buffer_free`.
@@ -116,13 +148,15 @@ pub(crate) fn type_mismatch(message: impl Into<String>) -> FfiError {
 }
 
 thread_local! {
-    static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
+    static LAST_ERROR: RefCell<Vec<u8>> = RefCell::new(vec![0]);
 }
 
 fn set_error(message: &str) {
     LAST_ERROR.with(|last| {
         // Error messages may contain file data, including embedded NUL bytes.
-        *last.borrow_mut() = CString::new(message.replace('\0', "\\0")).unwrap_or_default();
+        *last.borrow_mut() = CString::new(message.replace('\0', "\\0"))
+            .unwrap_or_default()
+            .into_bytes_with_nul();
     });
 }
 
@@ -149,7 +183,11 @@ pub(crate) fn catch_ffi<T>(f: impl FnOnce() -> FfiResult<T>) -> FfiResult<T> {
 pub(crate) fn ffi_call(f: impl FnOnce() -> FfiResult<()>) -> Status {
     match catch_ffi(f) {
         Ok(()) => {
-            set_error("");
+            LAST_ERROR.with(|last| {
+                let mut last = last.borrow_mut();
+                last.truncate(1);
+                last[0] = 0;
+            });
             Status::Ok
         }
         Err(error) => {
@@ -160,15 +198,19 @@ pub(crate) fn ffi_call(f: impl FnOnce() -> FfiResult<()>) -> Status {
 }
 
 pub(crate) unsafe fn document<'a>(doc: *const Document) -> FfiResult<&'a CadDocument> {
-    doc.as_ref()
-        .map(|doc| &doc.inner)
-        .ok_or_else(|| invalid("document is NULL"))
+    let doc = doc.as_ref().ok_or_else(|| invalid("document is NULL"))?;
+    if doc.writable.load(Ordering::Acquire) {
+        return Err(invalid("document has an active writable borrow"));
+    }
+    Ok(&doc.inner)
 }
 
 pub(crate) unsafe fn document_mut<'a>(doc: *mut Document) -> FfiResult<&'a mut CadDocument> {
-    doc.as_mut()
-        .map(|doc| &mut doc.inner)
-        .ok_or_else(|| invalid("document is NULL"))
+    let doc = doc.as_mut().ok_or_else(|| invalid("document is NULL"))?;
+    if doc.writable.load(Ordering::Acquire) {
+        return Err(invalid("document has an active writable borrow"));
+    }
+    Ok(&mut doc.inner)
 }
 
 pub(crate) unsafe fn output<'a, T>(out: *mut T) -> FfiResult<&'a mut T> {
@@ -231,7 +273,7 @@ pub extern "C" fn ar_upstream_version() -> *const c_char {
 
 #[no_mangle]
 pub extern "C" fn ar_last_error() -> *const c_char {
-    LAST_ERROR.with(|error| error.borrow().as_ptr())
+    LAST_ERROR.with(|error| error.borrow().as_ptr().cast())
 }
 
 #[no_mangle]
@@ -259,7 +301,7 @@ pub unsafe extern "C" fn ar_document_new(code: u32, out: *mut *mut Document) -> 
         let out = output(out)?;
         *out = ptr::null_mut();
         let inner = CadDocument::with_version(version(code)?);
-        *out = Box::into_raw(Box::new(Document { inner }));
+        *out = Box::into_raw(Box::new(Document::new(inner)));
         Ok(())
     })
 }
@@ -273,7 +315,7 @@ pub unsafe extern "C" fn ar_document_clone(
         let out = output(out)?;
         *out = ptr::null_mut();
         let inner = document(doc)?.clone();
-        *out = Box::into_raw(Box::new(Document { inner }));
+        *out = Box::into_raw(Box::new(Document::new(inner)));
         Ok(())
     })
 }
@@ -281,6 +323,9 @@ pub unsafe extern "C" fn ar_document_clone(
 #[no_mangle]
 pub unsafe extern "C" fn ar_document_free(doc: *mut Document) {
     if !doc.is_null() {
+        if (*doc).writable.load(Ordering::Acquire) {
+            return;
+        }
         drop(Box::from_raw(doc));
     }
 }

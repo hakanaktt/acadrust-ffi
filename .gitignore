@@ -3,3 +3,4 @@
 *.dxf
 *.dwg
 
+tools/generate-views/target/
