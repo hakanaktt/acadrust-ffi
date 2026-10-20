@@ -36,6 +36,8 @@ native view and writable-span lifetime rules, mutation paths, reports, ACIS,
 advanced I/O, and C integration patterns.
 The [I/O API guide](docs/API_IO.md) provides detailed reader, writer, importer,
 callback, and diagnostic examples.
+The [entity construction guide](docs/ENTITY_CONSTRUCTION.md) covers named C
+factories and C++ fluent builders for all 97 entity/subtype kinds.
 
 The header also provides short source aliases for common calls: `ar_new`,
 `ar_free`, `ar_read_file`, `ar_read`, `ar_write_file`, `ar_write`,

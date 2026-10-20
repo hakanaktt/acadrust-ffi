@@ -221,4 +221,6 @@ AR_API Status ar_layer_set_flags(Document *doc, const char *name, uint32_t flags
 #include "acadrust_database.h"
 #include "acadrust_acis.h"
 #include "acadrust_writable.h"
+#include "acadrust_builder.h"
+#include "acadrust_constructors.h"
 #endif

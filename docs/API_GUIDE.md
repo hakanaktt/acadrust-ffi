@@ -420,6 +420,10 @@ representations.
 
 ## Entity catalog and geometry
 
+For detached construction and named creation entry points for every catalog
+kind, see [Constructing every entity](ENTITY_CONSTRUCTION.md). That guide also
+covers the C++11 fluent wrapper and native one-call construction edits.
+
 The entity catalog covers all upstream top-level variants and subtype families.
 Use:
 
@@ -789,5 +793,10 @@ ar_table_entry_write ar_table_entry_resize ar_table_entry_select ar_table_entry_
 ```
 
 Together with the function declarations in the preceding sections, this is the
-complete exported `ar_*` function set in ABI version 1. `ar_abi_version` should
-be checked before a wrapper uses a newer inventory.
+original exported `ar_*` function set in ABI version 1. The construction APIs
+are documented in [Constructing every entity](ENTITY_CONSTRUCTION.md),
+[acadrust_builder.h](../include/acadrust_builder.h), and
+[acadrust_constructors.h](../include/acadrust_constructors.h). Their 97 named
+builder factories and 97 one-call creators are expanded from
+[acadrust_entity_catalog.inc](../include/acadrust_entity_catalog.inc).
+`ar_abi_version` should be checked before a wrapper uses a newer inventory.

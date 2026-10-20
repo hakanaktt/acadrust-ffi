@@ -25,14 +25,14 @@ pub(crate) struct WriteInput<'a> {
     stride: usize,
 }
 
-struct StagedWrite {
+pub(crate) struct StagedWrite {
     kind: i32,
     bytes: Vec<u8>,
     len: usize,
     stride: usize,
 }
 impl StagedWrite {
-    fn input(&self) -> WriteInput<'_> {
+    pub(crate) fn input(&self) -> WriteInput<'_> {
         WriteInput {
             kind: self.kind,
             bytes: &self.bytes,
@@ -67,7 +67,7 @@ impl WriteInput<'_> {
     }
 }
 
-unsafe fn write_input(input: *const NativeWrite) -> FfiResult<StagedWrite> {
+pub(crate) unsafe fn stage_write(input: *const NativeWrite) -> FfiResult<StagedWrite> {
     let input = input
         .as_ref()
         .ok_or_else(|| invalid("write input is NULL"))?;
@@ -101,6 +101,10 @@ unsafe fn write_input(input: *const NativeWrite) -> FfiResult<StagedWrite> {
         len: input.len,
         stride,
     })
+}
+
+unsafe fn write_input(input: *const NativeWrite) -> FfiResult<StagedWrite> {
+    stage_write(input)
 }
 
 pub(crate) fn protected(field: &str) -> bool {
@@ -137,6 +141,49 @@ pub(crate) fn ensure_field(field: &str) -> FfiResult<()> {
 }
 
 pub(crate) trait NativeMut {
+    fn write_integer(&mut self, value: i64) -> FfiResult<()> {
+        let bytes = value.to_ne_bytes();
+        self.write(&WriteInput {
+            kind: AR_VALUE_I64,
+            bytes: &bytes,
+            len: 1,
+            stride: 8,
+        })
+    }
+    fn write_unsigned(&mut self, value: u64) -> FfiResult<()> {
+        let bytes = value.to_ne_bytes();
+        self.write(&WriteInput {
+            kind: AR_VALUE_U64,
+            bytes: &bytes,
+            len: 1,
+            stride: 8,
+        })
+    }
+    fn accepts_f64(&self) -> bool {
+        false
+    }
+    fn write_vector(&mut self, value: Vector3) -> FfiResult<()> {
+        if [value.x, value.y, value.z].iter().any(|v| !v.is_finite()) {
+            return Err(invalid("vector coordinates must be finite"));
+        }
+        for name in ["x", "y", "z"] {
+            if !self.child_mut(name).is_ok_and(|value| value.accepts_f64()) {
+                return Err(type_mismatch("target is not a native 3D vector"));
+            }
+        }
+        for (name, component) in [("x", value.x), ("y", value.y), ("z", value.z)] {
+            self.child_mut(name)?.write(&WriteInput {
+                kind: AR_VALUE_F64,
+                bytes: &component.to_ne_bytes(),
+                len: 1,
+                stride: 8,
+            })?;
+        }
+        Ok(())
+    }
+    fn write_vectors(&mut self, _values: &[Vector3]) -> FfiResult<()> {
+        Err(type_mismatch("target is not a vector sequence"))
+    }
     fn writable_nested(
         &mut self,
         _parts: &[&str],
@@ -343,6 +390,8 @@ macro_rules! construct_struct {
 macro_rules! numeric_mut {
     ($($ty:ty => $kind:ident),* $(,)?) => { $(
         impl NativeMut for $ty {
+            fn write_integer(&mut self, value: i64) -> FfiResult<()> { *self = Self::try_from(value).map_err(|_| invalid("integer exceeds target range"))?; Ok(()) }
+            fn write_unsigned(&mut self, value: u64) -> FfiResult<()> { *self = Self::try_from(value).map_err(|_| invalid("integer exceeds target range"))?; Ok(()) }
             fn writable_storage(&mut self) -> FfiResult<crate::writable::RawStorage> { Ok(crate::writable::RawStorage::primitive(std::ptr::from_mut(self), 1, $kind)) }
             fn writable_kind() -> Option<i32> { Some($kind) }
             fn write(&mut self, input: &WriteInput<'_>) -> FfiResult<()> { *self = Self::from_input(input)?; Ok(()) }
@@ -360,6 +409,7 @@ numeric_mut!(usize=>AR_VALUE_U32,isize=>AR_VALUE_I32);
 
 macro_rules! float_mut {
     ($($ty:ty => $kind:ident),* $(,)?) => { $(impl NativeMut for $ty {
+        fn accepts_f64(&self) -> bool { $kind == AR_VALUE_F64 }
         fn writable_storage(&mut self) -> FfiResult<crate::writable::RawStorage> { Ok(crate::writable::RawStorage::primitive(std::ptr::from_mut(self), 1, $kind)) }
         fn writable_kind() -> Option<i32> { Some($kind) }
         fn write(&mut self, input: &WriteInput<'_>) -> FfiResult<()> { *self = Self::from_input(input)?; Ok(()) }
@@ -406,6 +456,15 @@ impl NativeMut for char {
     }
 }
 impl NativeMut for Handle {
+    fn write_integer(&mut self, value: i64) -> FfiResult<()> {
+        *self =
+            Handle::new(u64::try_from(value).map_err(|_| invalid("handle must be nonnegative"))?);
+        Ok(())
+    }
+    fn write_unsigned(&mut self, value: u64) -> FfiResult<()> {
+        *self = Handle::new(value);
+        Ok(())
+    }
     fn write(&mut self, input: &WriteInput<'_>) -> FfiResult<()> {
         *self = Self::from_input(input)?;
         Ok(())
@@ -446,6 +505,20 @@ fn index(segment: &str) -> FfiResult<usize> {
 }
 
 impl<T: NativeMut> NativeMut for Vec<T> {
+    fn write_vectors(&mut self, values: &[Vector3]) -> FfiResult<()> {
+        if values.is_empty() {
+            let mut element = T::create()?;
+            element.write_vector(Vector3::default())?;
+        }
+        let mut result = Vec::with_capacity(values.len());
+        for value in values {
+            let mut item = T::create()?;
+            item.write_vector(*value)?;
+            result.push(item);
+        }
+        *self = result;
+        Ok(())
+    }
     fn writable_storage(&mut self) -> FfiResult<crate::writable::RawStorage> {
         let kind = T::writable_kind().ok_or_else(|| {
             type_mismatch("borrow a numeric or byte array, or one of this sequence's children")
@@ -658,11 +731,37 @@ impl<K: Ord + Display, V: NativeMut> NativeMut for BTreeMap<K, V> {
 }
 
 pub(crate) enum Edit<'a> {
+    Integer(i64),
+    Unsigned(u64),
+    Vector(Vector3),
+    Vectors(&'a [Vector3]),
     Touch,
     Write(WriteInput<'a>),
     Resize(usize),
     Select(&'a str),
     Option(bool),
+}
+
+pub(crate) fn edit_native_value(
+    value: &mut dyn NativeMut,
+    path: &str,
+    edit: Edit<'_>,
+) -> FfiResult<()> {
+    let parts = path_parts(path)?;
+    let parts = if parts.first().copied() == value.variant_name() {
+        &parts[1..]
+    } else {
+        &parts[..]
+    };
+    let parts = if matches!(parts.first(), Some(&"v0" | &"0")) {
+        &parts[1..]
+    } else {
+        parts
+    };
+    if parts.is_empty() {
+        return Err(invalid("native mutation requires a property path"));
+    }
+    apply(value.child_mut("v0")?, parts, &edit)
 }
 
 fn apply(value: &mut dyn NativeMut, parts: &[&str], edit: &Edit<'_>) -> FfiResult<()> {
@@ -678,6 +777,10 @@ fn apply(value: &mut dyn NativeMut, parts: &[&str], edit: &Edit<'_>) -> FfiResul
         value.after_child(segment);
     } else {
         match edit {
+            Edit::Integer(number) => value.write_integer(*number)?,
+            Edit::Unsigned(number) => value.write_unsigned(*number)?,
+            Edit::Vector(vector) => value.write_vector(*vector)?,
+            Edit::Vectors(vectors) => value.write_vectors(vectors)?,
             Edit::Touch => {}
             Edit::Write(input) => value.write(input)?,
             Edit::Resize(len) => value.resize(*len)?,
